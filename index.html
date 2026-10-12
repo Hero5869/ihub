@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StockSync - Inventory Management</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
+  <style>
+    body {
+      background-color: #f8fafc;
+      font-family: system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+    }
+    .card-portal {
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      border: 2px solid transparent;
+    }
+    .card-portal:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+      border-color: #2563eb;
+    }
+    .scanner-box {
+      max-width: 480px;
+      margin: auto;
+      border-radius: 12px;
+      overflow: hidden;
+      display: none;
+    }
+    .barcode-svg {
+      max-width: 100%;
+      height: auto;
+    }
+    @media print {
+      body * { visibility: hidden; }
+      #printableBarcodeArea, #printableBarcodeArea * { visibility: visible; }
+      #printableBarcodeArea {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        display: block !important;
+      }
+    }
+  </style>
+</head>
+<body class="p-2 p-md-4">
+  <div class="container-fluid" style="max-width: 1200px;">
+
+    <!-- TOP NAV -->
+    <header class="d-flex justify-content-between align-items-center mb-4 pb-2 border-bottom">
+      <div class="d-flex align-items-center gap-2">
+        <i class="bi bi-box-seam-fill fs-3 text-primary"></i>
+        <h4 class="m-0 fw-bold">StockSync Portal</h4>
+      </div>
+      <div>
+        <span class="badge bg-secondary p-2" id="roleBadge">Role: Guest</span>
+        <button class="btn btn-sm btn-outline-danger ms-2 d-none" id="logoutBtn" onclick="switchRole(null)">Exit</button>
+      </div>
+    </header>
+
+    <!-- ROLE SELECTION SCREEN -->
+    <div id="roleSelectionScreen" class="py-5 text-center">
+      <h2 class="fw-bold mb-3">Select Portal Access</h2>
+      <p class="text-muted mb-5">Choose customer browsing mode or enter admin credentials to manage inventory.</p>
+      
+      <div class="row g-4 justify-content-center">
+        <div class="col-12 col-md-5">
+          <div class="card card-portal h-100 shadow-sm p-4 text-center" onclick="openCustomerPortal()">
+            <div class="mb-3 text-primary">
+              <i class="bi bi-person-badge fs-1"></i>
+            </div>
+            <h3 class="fw-bold">Customer Portal</h3>
+            <p class="text-secondary">Search items, check live stock, view prices, or scan item barcodes in-store.</p>
+            <button class="btn btn-primary mt-auto">Enter as Customer</button>
+          </div>
+        </div>
+
+        <div class="col-12 col-md-5">
+          <div class="card card-portal h-100 shadow-sm p-4 text-center" onclick="promptAdminModal()">
+            <div class="mb-3 text-danger">
+              <i class="bi bi-shield-lock-fill fs-1"></i>
+            </div>
+            <h3 class="fw-bold">Admin Portal</h3>
+            <p class="text-secondary">Scan/enter barcodes, restock inventory, add products, and print custom barcode labels.</p>
+            <button class="btn btn-outline-danger mt-auto">Enter as Admin</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LIVE CAMERA SCANNER -->
+    <div class="card p-3 mb-4 scanner-box shadow" id="scannerWrapper">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h6 class="m-0 fw-bold"><i class="bi bi-camera me-1"></i> Barcode Scanner</h6>
+        <button type="button" class="btn-close" onclick="stopScanner()"></button>
+      </div>
+      <div id="reader"></div>
+      <div class="small text-muted text-center mt-2">Center the barcode inside the camera frame</div>
+    </div>
+
+    <!-- CUSTOMER VIEW -->
+    <div id="customerPortalScreen" class="d-none">
+      <div class="row g-3 align-items-center mb-4">
+        <div class="col-md-7">
+          <div class="input-group">
+            <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+            <input type="text" id="custSearchInput" class="form-control" placeholder="Search product title, category, or barcode..." onkeyup="filterCustomerProducts()">
+          </div>
+        </div>
+        <div class="col-md-5 d-flex gap-2">
+          <button class="btn btn-outline-primary w-100" onclick="startScanner('customer')">
+            <i class="bi bi-upc-scan me-1"></i> Scan Barcode
+          </button>
+          <button class="btn btn-light" onclick="fetchProducts()"><i class="bi bi-arrow-clockwise"></i></button>
+        </div>
+      </div>
+
+      <div class="row g-3" id="customerProductGrid">
+        <div class="text-center py-5 text-muted">Loading inventory...</div>
+      </div>
+    </div>
+
+    <!-- ADMIN VIEW -->
+    <div id="adminPortalScreen" class="d-none">
+      <div class="row g-4">
+        <!-- Product Entry Form -->
+        <div class="col-lg-5">
+          <div class="card shadow-sm p-3 p-md-4">
+            <h5 class="fw-bold mb-3"><i class="bi bi-pencil-square me-2"></i>Product Entry & Restock</h5>
+            
+            <div class="mb-3">
+              <label class="form-label small fw-semibold">Barcode / SKU</label>
+              <div class="input-group">
+                <input type="text" id="adminBarcode" class="form-control" placeholder="Scan or type barcode" onchange="checkExistingBarcode(this.value)">
+                <button class="btn btn-outline-secondary" onclick="startScanner('admin')" title="Scan with camera">
+                  <i class="bi bi-upc-scan"></i>
+                </button>
+                <button class="btn btn-outline-primary" onclick="generateNewBarcodeCode()" title="Auto-generate SKU">
+                  <i class="bi bi-magic"></i>
+                </button>
+              </div>
+              <div id="barcodeMatchAlert" class="form-text small"></div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label small fw-semibold">Product Title</label>
+              <input type="text" id="adminTitle" class="form-control" placeholder="Item name">
+            </div>
+
+            <div class="row g-2 mb-3">
+              <div class="col-md-6">
+                <label class="form-label small fw-semibold">Category</label>
+                <input type="text" id="adminCategory" class="form-control" placeholder="Category">
+              </div>
+              <div class="col-md-6">
+                <label class="form-label small fw-semibold">Price (₹)</label>
+                <input type="number" step="0.01" id="adminPrice" class="form-control" placeholder="0.00">
+              </div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label small fw-semibold">Stock Quantity</label>
+              <div class="input-group">
+                <input type="number" id="adminStock" class="form-control" value="1">
+                <button class="btn btn-outline-success" type="button" onclick="quickAddStock(10)">+10</button>
+                <button class="btn btn-outline-success" type="button" onclick="quickAddStock(50)">+50</button>
+              </div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label small fw-semibold">Description / Notes</label>
+              <textarea id="adminDesc" rows="2" class="form-control" placeholder="Specifications..."></textarea>
+            </div>
+
+            <div class="d-flex gap-2">
+              <button class="btn btn-primary flex-grow-1" id="saveProductBtn" onclick="submitProductForm()">
+                <i class="bi bi-save me-1"></i> Save to Sheet
+              </button>
+              <button class="btn btn-outline-secondary" onclick="resetAdminForm()">Clear</button>
+            </div>
+
+            <!-- Barcode Preview & Print -->
+            <div class="mt-4 pt-3 border-top text-center" id="barcodePreviewSection" style="display:none;">
+              <h6 class="small fw-bold text-muted mb-2">Printable Label Preview</h6>
+              <div class="p-2 border rounded bg-white d-inline-block">
+                <svg id="barcodeCanvas" class="barcode-svg"></svg>
+              </div>
+              <div class="mt-2">
+                <button class="btn btn-sm btn-dark" onclick="printBarcodeSticker()">
+                  <i class="bi bi-printer me-1"></i> Print Sticker
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Inventory Table -->
+        <div class="col-lg-7">
+          <div class="card shadow-sm p-3">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+              <h5 class="fw-bold m-0"><i class="bi bi-table me-2"></i>Inventory Records</h5>
+              <button class="btn btn-sm btn-outline-primary" onclick="fetchProducts()">Refresh</button>
+            </div>
+            <div class="input-group mb-3">
+              <span class="input-group-text"><i class="bi bi-search"></i></span>
+              <input type="text" id="adminTableSearch" class="form-control" placeholder="Search records..." onkeyup="filterAdminTable()">
+            </div>
+            <div class="table-responsive" style="max-height: 540px;">
+              <table class="table table-hover align-middle small">
+                <thead class="table-light sticky-top">
+                  <tr>
+                    <th>Barcode</th>
+                    <th>Product</th>
+                    <th>Price</th>
+                    <th>Stock</th>
+                    <th class="text-end">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="adminTableBody">
+                  <tr><td colspan="5" class="text-center py-4">Loading data...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ADMIN AUTH MODAL -->
+  <div class="modal fade" id="adminAuthModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold"><i class="bi bi-shield-lock text-danger me-2"></i>Admin Verification</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <label class="form-label">Enter Admin Master Key</label>
+          <input type="password" id="adminInputPassword" class="form-control form-control-lg" placeholder="••••••••">
+          <div id="authErrorMsg" class="text-danger small mt-2 d-none">Invalid Password. Access Denied.</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-danger" id="loginSubmitBtn" onclick="verifyAndLoginAdmin()">Login</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PRINT WRAPPER -->
+  <div id="printableBarcodeArea" class="d-none text-center p-4">
+    <h3 id="printItemTitle" class="fw-bold mb-1"></h3>
+    <h5 id="printItemPrice" class="text-muted mb-2"></h5>
+    <svg id="printBarcodeSvg"></svg>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    // PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL HERE:
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwU9vWep82W3U0oymeXmQlSMhYbjkoILhv7qDTf5kBXA7ep6MVj3YeZSUj55i_aXLY/exec";
+
+    let cachedAdminKey = "";
+    let inventoryStore = [];
+    let html5QrCodeScanner = null;
+    let activeScannerRole = null;
+    let authModalInstance = null;
+
+    window.onload = function() {
+      authModalInstance = new bootstrap.Modal(document.getElementById('adminAuthModal'));
+    };
+
+    function switchRole(role) {
+      document.getElementById('roleSelectionScreen').classList.toggle('d-none', !!role);
+      document.getElementById('customerPortalScreen').classList.toggle('d-none', role !== 'customer');
+      document.getElementById('adminPortalScreen').classList.toggle('d-none', role !== 'admin');
+      
+      const badge = document.getElementById('roleBadge');
+      const logout = document.getElementById('logoutBtn');
+      
+      if (role === 'customer') {
+        badge.className = 'badge bg-primary p-2';
+        badge.textContent = 'Role: Customer';
+        logout.classList.remove('d-none');
+        fetchProducts();
+      } else if (role === 'admin') {
+        badge.className = 'badge bg-danger p-2';
+        badge.textContent = 'Role: Administrator';
+        logout.classList.remove('d-none');
+        fetchProducts();
+      } else {
+        badge.className = 'badge bg-secondary p-2';
+        badge.textContent = 'Role: Guest';
+        logout.classList.add('d-none');
+        cachedAdminKey = "";
+        stopScanner();
+      }
+    }
+
+    function openCustomerPortal() {
+      switchRole('customer');
+    }
+
+    function promptAdminModal() {
+      document.getElementById('adminInputPassword').value = '';
+      document.getElementById('authErrorMsg').classList.add('d-none');
+      authModalInstance.show();
+    }
+
+    async function verifyAndLoginAdmin() {
+      const entered = document.getElementById('adminInputPassword').value.trim();
+      const loginBtn = document.getElementById('loginSubmitBtn');
+      const errBox = document.getElementById('authErrorMsg');
+
+      loginBtn.disabled = true;
+      errBox.classList.add('d-none');
+
+      try {
+        const response = await fetch(SCRIPT_URL, {
+          method: "POST",
+          body: JSON.stringify({ action: "verifyAdmin", password: entered })
+        });
+        const res = await response.json();
+
+        if (res.status === "success" && res.valid) {
+          cachedAdminKey = entered;
+          authModalInstance.hide();
+          switchRole('admin');
+        } else {
+          errBox.classList.remove('d-none');
+        }
+      } catch (e) {
+        errBox.textContent = "Connection error. Make sure Web App URL is configured.";
+        errBox.classList.remove('d-none');
+      } finally {
+        loginBtn.disabled = false;
+      }
+    }
+
+    async function fetchProducts() {
+      try {
+        const response = await fetch(SCRIPT_URL);
+        const res = await response.json();
+        if (res.status === "success") {
+          inventoryStore = res.data || [];
+          renderCustomerGrid(inventoryStore);
+          renderAdminTable(inventoryStore);
+        }
+      } catch (e) {
+        console.error("Failed to load products:", e);
+      }
+    }
+
+    function renderCustomerGrid(items) {
+      const grid = document.getElementById('customerProductGrid');
+      if (!items || items.length === 0) {
+        grid.innerHTML = '<div class="col-12 text-center py-5 text-muted">No items found in stock.</div>';
+        return;
+      }
+
+      grid.innerHTML = items.map(p => `
+        <div class="col-12 col-md-6 col-lg-4">
+          <div class="card h-100 shadow-sm border-0">
+            <div class="card-body">
+              <span class="badge bg-light text-dark border mb-2">${p.category}</span>
+              <h5 class="card-title fw-bold text-dark">${p.title}</h5>
+              <p class="card-text text-secondary small">${p.description || 'No description available.'}</p>
+              <div class="d-flex justify-content-between align-items-center mt-3 pt-2 border-top">
+                <span class="fs-4 fw-bold text-success">₹${p.price.toFixed(2)}</span>
+                <span class="badge ${p.stock > 0 ? 'bg-success-subtle text-success' : 'bg-danger-subtle text-danger'} px-2 py-1">
+                  ${p.stock > 0 ? `${p.stock} in stock` : 'Out of Stock'}
+                </span>
+              </div>
+              <div class="text-muted small mt-2 font-monospace">SKU: ${p.barcode}</div>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function filterCustomerProducts() {
+      const q = document.getElementById('custSearchInput').value.toLowerCase();
+      const filtered = inventoryStore.filter(p => 
+        p.title.toLowerCase().includes(q) ||
+        p.barcode.toLowerCase().includes(q) ||
+        (p.category && p.category.toLowerCase().includes(q))
+      );
+      renderCustomerGrid(filtered);
+    }
+
+    function renderAdminTable(items) {
+      const tbody = document.getElementById('adminTableBody');
+      if (!items || items.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-muted">No items found.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.map(p => `
+        <tr>
+          <td><span class="badge bg-light text-dark border font-monospace">${p.barcode}</span></td>
+          <td>
+            <div class="fw-bold">${p.title}</div>
+            <div class="text-muted small">${p.category}</div>
+          </td>
+          <td>₹${p.price.toFixed(2)}</td>
+          <td><span class="fw-bold ${p.stock <= 5 ? 'text-danger' : 'text-dark'}">${p.stock}</span></td>
+          <td class="text-end">
+            <button class="btn btn-sm btn-outline-primary me-1" onclick="loadProductIntoForm('${p.barcode}')" title="Edit">
+              <i class="bi bi-pencil"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-dark" onclick="prepareStickerPrint('${p.barcode}')" title="Print Barcode">
+              <i class="bi bi-printer"></i>
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    function filterAdminTable() {
+      const q = document.getElementById('adminTableSearch').value.toLowerCase();
+      const filtered = inventoryStore.filter(p => 
+        p.title.toLowerCase().includes(q) ||
+        p.barcode.toLowerCase().includes(q) ||
+        (p.category && p.category.toLowerCase().includes(q))
+      );
+      renderAdminTable(filtered);
+    }
+
+    function checkExistingBarcode(barcode) {
+      const match = inventoryStore.find(p => p.barcode.toLowerCase() === barcode.trim().toLowerCase());
+      const alertBox = document.getElementById('barcodeMatchAlert');
+      if (match) {
+        alertBox.innerHTML = `<span class="text-success"><i class="bi bi-check-circle"></i> Existing Product found: <b>${match.title}</b>. Loaded for editing.</span>`;
+        loadProductIntoForm(match.barcode);
+      } else {
+        alertBox.innerHTML = barcode.trim() ? `<span class="text-primary"><i class="bi bi-plus-circle"></i> New SKU. Ready to save.</span>` : "";
+        updateBarcodePreview(barcode);
+      }
+    }
+
+    function loadProductIntoForm(barcode) {
+      const p = inventoryStore.find(item => item.barcode === barcode);
+      if (!p) return;
+      document.getElementById('adminBarcode').value = p.barcode;
+      document.getElementById('adminTitle').value = p.title;
+      document.getElementById('adminCategory').value = p.category;
+      document.getElementById('adminPrice').value = p.price;
+      document.getElementById('adminStock').value = p.stock;
+      document.getElementById('adminDesc').value = p.description || '';
+      updateBarcodePreview(p.barcode);
+    }
+
+    function generateNewBarcodeCode() {
+      const randomCode = "PRD-" + Date.now().toString(36).toUpperCase();
+      document.getElementById('adminBarcode').value = randomCode;
+      checkExistingBarcode(randomCode);
+    }
+
+    function quickAddStock(qty) {
+      const stockInput = document.getElementById('adminStock');
+      stockInput.value = (parseInt(stockInput.value) || 0) + qty;
+    }
+
+    function resetAdminForm() {
+      document.getElementById('adminBarcode').value = '';
+      document.getElementById('adminTitle').value = '';
+      document.getElementById('adminCategory').value = '';
+      document.getElementById('adminPrice').value = '';
+      document.getElementById('adminStock').value = '1';
+      document.getElementById('adminDesc').value = '';
+      document.getElementById('barcodeMatchAlert').innerHTML = '';
+      document.getElementById('barcodePreviewSection').style.display = 'none';
+    }
+
+    async function submitProductForm() {
+      const btn = document.getElementById('saveProductBtn');
+      const payload = {
+        barcode: document.getElementById('adminBarcode').value.trim(),
+        title: document.getElementById('adminTitle').value.trim(),
+        category: document.getElementById('adminCategory').value.trim(),
+        price: parseFloat(document.getElementById('adminPrice').value) || 0,
+        stock: parseInt(document.getElementById('adminStock').value) || 0,
+        description: document.getElementById('adminDesc').value.trim()
+      };
+
+      if (!payload.title) {
+        alert('Please enter a product title.');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> Saving...`;
+
+      try {
+        const response = await fetch(SCRIPT_URL, {
+          method: "POST",
+          body: JSON.stringify({
+            action: "saveProduct",
+            authPassword: cachedAdminKey,
+            payload: payload
+          })
+        });
+        const res = await response.json();
+
+        if (res.status === "success") {
+          alert(`Saved successfully! SKU: ${res.result.barcode}`);
+          updateBarcodePreview(res.result.barcode);
+          fetchProducts();
+        } else {
+          alert("Error: " + res.message);
+        }
+      } catch (e) {
+        alert("Failed to submit: " + e.message);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<i class="bi bi-save me-1"></i> Save to Sheet`;
+      }
+    }
+
+    function updateBarcodePreview(code) {
+      if (!code) {
+        document.getElementById('barcodePreviewSection').style.display = 'none';
+        return;
+      }
+      document.getElementById('barcodePreviewSection').style.display = 'block';
+      JsBarcode("#barcodeCanvas", code, {
+        format: "CODE128",
+        width: 2,
+        height: 60,
+        displayValue: true
+      });
+    }
+
+    function prepareStickerPrint(barcode) {
+      const item = inventoryStore.find(i => i.barcode === barcode);
+      if (!item) return;
+      document.getElementById('printItemTitle').innerText = item.title;
+      document.getElementById('printItemPrice').innerText = "Price: ₹" + item.price.toFixed(2);
+      JsBarcode("#printBarcodeSvg", item.barcode, {
+        format: "CODE128",
+        width: 2,
+        height: 70,
+        displayValue: true
+      });
+      window.print();
+    }
+
+    function printBarcodeSticker() {
+      const code = document.getElementById('adminBarcode').value.trim();
+      const title = document.getElementById('adminTitle').value.trim() || "Item";
+      const price = document.getElementById('adminPrice').value || "0";
+      
+      document.getElementById('printItemTitle').innerText = title;
+      document.getElementById('printItemPrice').innerText = "Price: ₹" + price;
+      JsBarcode("#printBarcodeSvg", code, {
+        format: "CODE128",
+        width: 2,
+        height: 70,
+        displayValue: true
+      });
+      window.print();
+    }
+
+    function startScanner(role) {
+      activeScannerRole = role;
+      document.getElementById('scannerWrapper').style.display = 'block';
+
+      if (!html5QrCodeScanner) {
+        html5QrCodeScanner = new Html5Qrcode("reader");
+      }
+
+      html5QrCodeScanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 150 } },
+        (decodedText) => {
+          if (activeScannerRole === 'customer') {
+            document.getElementById('custSearchInput').value = decodedText;
+            filterCustomerProducts();
+          } else if (activeScannerRole === 'admin') {
+            document.getElementById('adminBarcode').value = decodedText;
+            checkExistingBarcode(decodedText);
+          }
+          stopScanner();
+        },
+        () => {}
+      ).catch(err => {
+        alert("Camera error or permission denied: " + err);
+        stopScanner();
+      });
+    }
+
+    function stopScanner() {
+      if (html5QrCodeScanner) {
+        html5QrCodeScanner.stop().then(() => {
+          document.getElementById('scannerWrapper').style.display = 'none';
+        }).catch(() => {
+          document.getElementById('scannerWrapper').style.display = 'none';
+        });
+      } else {
+        document.getElementById('scannerWrapper').style.display = 'none';
+      }
+    }
+  </script>
+</body>
+</html>
